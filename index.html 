@@ -1,0 +1,168 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>서울 전통·특색 카페 지도</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+    integrity="sha256-sA+g3kGkNf0v1g7b2b2l0q9bqzYqkYv1Yk5r5v0qv+M=" crossorigin=""/>
+  <style>
+    html,body { height:100%; margin:0; font-family: -apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo", "Malgun Gothic", "맑은 고딕", "Noto Sans KR", sans-serif; }
+    #map { width:100%; height:100%; }
+    .leaflet-popup-content-wrapper { font-size:14px; }
+    .popup-img { width:260px; height:150px; object-fit:cover; display:block; margin-bottom:8px; border-radius:6px; }
+    .naver-link { display:inline-block; margin-top:6px; background:#03c75a; color:white; padding:6px 8px; text-decoration:none; border-radius:4px; font-size:13px; }
+    .top-control {
+      position: absolute;
+      left:10px;
+      top:10px;
+      z-index:1000;
+      background: rgba(255,255,255,0.95);
+      padding:8px 10px;
+      border-radius:6px;
+      box-shadow:0 1px 4px rgba(0,0,0,0.15);
+      font-size:13px;
+    }
+    .search { width:260px; padding:6px; box-sizing:border-box; margin-bottom:6px; }
+    .list-btn { display:inline-block; margin-right:6px; cursor:pointer; color:#0366d6; text-decoration:underline; }
+    #listPanel {
+      position: absolute;
+      right:10px;
+      top:10px;
+      z-index:1000;
+      width:320px;
+      max-height:70vh;
+      overflow:auto;
+      background: rgba(255,255,255,0.98);
+      padding:10px;
+      border-radius:8px;
+      box-shadow:0 2px 8px rgba(0,0,0,0.15);
+      display:none;
+    }
+    .place { padding:8px; border-bottom:1px solid #eee; cursor:pointer; }
+    .place h4 { margin:0 0 4px 0; font-size:14px; }
+    .place p { margin:0; font-size:12px; color:#555; }
+    footer.note { position: absolute; left:0; right:0; bottom:0; text-align:center; padding:6px; font-size:12px; color:#666; background:rgba(255,255,255,0.8); }
+  </style>
+</head>
+<body>
+  <div id="map"></div>
+  <div class="top-control" id="controls">
+    <input id="filter" class="search" placeholder="카페 이름 필터 (예: 을지다방)" />
+    <span class="list-btn" id="toggleList">목록 보기</span>
+    <span class="list-btn" id="fitAll">모두 보기</span>
+  </div>
+  <div id="listPanel"></div>
+  <footer class="note">팝업의 '네이버지도에서 보기' 버튼을 클릭하면 해당 카페를 네이버 지도로 검색합니다.</footer>
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+    integrity="sha256-o9N1j8Hk0kQb3e9mWQmKQ1kQp1sKQ1r4u1q3k1jv0C4=" crossorigin=""></script>
+  <script>
+    // 사용자 제공 카페 목록 (한글) — 파일을 그대로 GitHub에 올리면 바로 지도로 열립니다.
+    const places = [
+"을지다방","커피한약방","세운나다방","학림다방","맛남다방","커피 문화사","금성다방","대오서점","나무새 찻집","천장지구","백조다방","차마시는뜰","자작나무 이야기","낙원역","커피 한잔","머무름","인사동 찻집","아부 커피","한옥 카페","아마츄어 작업실 광장시장점","Le labo","Onion cafe","Waoak Bar","수연산방","서화커피","Haus coffee","오제도","한옥 찻집","ium1966","새소리물소리"
+    ];
+
+    // 지도 초기화 (서울 시청 인근 중심)
+    const map = L.map('map', { minZoom: 11 }).setView([37.5665, 126.9780], 13);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      maxZoom: 19,
+      attribution: '© OpenStreetMap contributors'
+    }).addTo(map);
+
+    // 동적으로 장소별 SVG 플레이스홀더 이미지를 만들어 고유 이미지처럼 보이게 함
+    function makePlaceholder(name, w=520, h=300) {
+      const svg = `<svg xmlns='http://www.w3.org/2000/svg' width='${w}' height='${h}'>
+        <rect width='100%' height='100%' fill='#f7f7f7'/>
+        <rect x='10' y='10' width='${w-20}' height='${h-20}' rx='8' fill='#fff' stroke='#e6e6e6'/>
+        <text x='50%' y='45%' dominant-baseline='middle' text-anchor='middle' fill='#888' font-family='Noto Sans KR, Malgun Gothic, sans-serif' font-size='28'>${name}</text>
+        <text x='50%' y='62%' dominant-baseline='middle' text-anchor='middle' fill='#bbb' font-family='Noto Sans KR, Malgun Gothic, sans-serif' font-size='16'>사진을 준비 중입니다</text>
+      </svg>`;
+      return 'data:image/svg+xml;utf8,' + encodeURIComponent(svg);
+    }
+
+    // 임시 좌표: 서울 중심을 기준으로 원형 배치 — 사용자가 원하면 실제 위도/경도로 교체 가능
+    const baseLat = 37.5665, baseLng = 126.9780;
+    const markers = [];
+    const listPanel = document.getElementById('listPanel');
+
+    // bounds 를 모아서 fit 하게 함
+    const bounds = [];
+
+    places.forEach((name, i) => {
+      const angle = i * 0.45;
+      const lat = baseLat + (Math.cos(angle) * 0.02 * (1 + (i%3)*0.12));
+      const lng = baseLng + (Math.sin(angle) * 0.02 * (1 + (i%4)*0.09));
+
+      const img = makePlaceholder(name);
+      const description = `${name} — 전통적이고 특색 있는 분위기의 카페/다방입니다. 네이버 지도로 검색하여 정확한 위치와 리뷰를 확인하세요.`;
+      const naverSearch = 'https://map.naver.com/v5/search/' + encodeURIComponent(name);
+
+      const popupHtml = `
+        <div style="min-width:260px">
+          <img class="popup-img" src="${img}" alt="${name} 사진" />
+          <h3 style="margin:0 0 6px 0">${name}</h3>
+          <div style="font-size:13px;color:#333">${description}</div>
+          <a class="naver-link" href="${naverSearch}" target="_blank" rel="noopener">네이버지도에서 보기</a>
+        </div>
+      `;
+
+      const marker = L.marker([lat,lng]).addTo(map).bindPopup(popupHtml);
+      markers.push({marker, name, lat, lng, img, description, naverSearch});
+      bounds.push([lat,lng]);
+
+      // 리스트 패널 항목 생성
+      const el = document.createElement('div');
+      el.className = 'place';
+      el.innerHTML = `<h4>${name}</h4><p>${description}</p>`;
+      el.onclick = () => { map.setView([lat,lng], 16); marker.openPopup(); };
+      listPanel.appendChild(el);
+    });
+
+    // 처음 열면 전체 bounds 로 맞추고 첫 팝업은 닫힌 상태로
+    if (bounds.length) {
+      map.fitBounds(bounds, { padding: [40,40] });
+    }
+
+    // 필터 기능: 이름 포함 여부로 필터
+    const filterInput = document.getElementById('filter');
+    filterInput.addEventListener('input', () => {
+      const q = filterInput.value.trim().toLowerCase();
+      // 토글 로직: 보여줄 마커만 map에 추가
+      markers.forEach(item => {
+        const contains = item.name.toLowerCase().includes(q);
+        if (contains && !map.hasLayer(item.marker)) map.addLayer(item.marker);
+        if (!contains && map.hasLayer(item.marker)) map.removeLayer(item.marker);
+      });
+      // 리스트 갱신
+      listPanel.innerHTML = '';
+      markers.forEach(item => {
+        if (item.name.toLowerCase().includes(q)) {
+          const el = document.createElement('div');
+          el.className = 'place';
+          el.innerHTML = `<h4>${item.name}</h4><p>${item.description}</p>`;
+          el.onclick = () => { map.setView([item.lat,item.lng], 16); item.marker.openPopup(); };
+          listPanel.appendChild(el);
+        }
+      });
+    });
+
+    // 목록 토글 및 모두 보기
+    document.getElementById('toggleList').addEventListener('click', () => {
+      listPanel.style.display = listPanel.style.display === 'none' ? 'block' : 'none';
+    });
+    document.getElementById('fitAll').addEventListener('click', () => {
+      if (bounds.length) map.fitBounds(bounds, { padding: [40,40] });
+    });
+
+    // 초기 상태: 목록 숨김 (사용자가 링크 열면 즉시 지도가 보임)
+    listPanel.style.display = 'none';
+
+    // 키보드 사용성: ESC로 목록 닫기
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') listPanel.style.display = 'none';
+    });
+
+  </script>
+</body>
+</html>
